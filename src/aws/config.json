@@ -1,0 +1,11 @@
+{
+  "region": "us-east-1",
+  "account_id": "214086774356",
+  "dynamodb_table": "SmartGrid-AgentDecisions",
+  "sns_topic_arn": "arn:aws:sns:us-east-1:214086774356:SmartGrid-AnomalyAlerts",
+  "lambda_function": "SmartGrid-MitigationTrigger",
+  "lambda_arn": "arn:aws:lambda:us-east-1:214086774356:function:SmartGrid-MitigationTrigger",
+  "iot_thing": "SmartGrid-PMU-Sensor",
+  "iot_endpoint": "a3q4osr3jxfsp4-ats.iot.us-east-1.amazonaws.com",
+  "cw_namespace": "SmartGrid/Agents"
+}
