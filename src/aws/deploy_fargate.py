@@ -58,13 +58,20 @@ def section(title):
 
 def run_cmd(cmd, check=True, shell=True):
     """Run a shell command and print output."""
+    import os
+    env = os.environ.copy()
+    docker_bin = r"C:\Program Files\Docker\Docker\resources\bin"
+    if docker_bin not in env.get("PATH", ""):
+        env["PATH"] = docker_bin + os.pathsep + env.get("PATH", "")
+
     print(f"  $ {cmd}")
-    result = subprocess.run(cmd, shell=shell, capture_output=True, text=True, cwd=str(PROJECT_ROOT))
-    if result.stdout.strip():
+    result = subprocess.run(cmd, shell=shell, capture_output=True, text=True, cwd=str(PROJECT_ROOT), env=env, encoding="utf-8", errors="ignore")
+    if result.stdout and result.stdout.strip():
         for line in result.stdout.strip().split('\n')[:10]:
             print(f"    {line}")
     if result.returncode != 0 and check:
-        print(f"  ERROR: {result.stderr.strip()[:200]}")
+        if result.stderr:
+            print(f"  ERROR: {result.stderr.strip()[:200]}")
         if check:
             sys.exit(1)
     return result
@@ -76,27 +83,39 @@ def run_cmd(cmd, check=True, shell=True):
 
 def authenticate_ecr():
     section("STEP 1/5 — Authenticate Docker to ECR")
+    import base64
+    import os
 
     ecr = boto3.client("ecr", region_name=REGION)
-    token = ecr.get_authorization_token()
-    endpoint = token["authorizationData"][0]["proxyEndpoint"]
+    token_resp = ecr.get_authorization_token()
+    auth_data = token_resp["authorizationData"][0]
+    token = auth_data["authorizationToken"]
 
-    # Use AWS CLI to login Docker to ECR
-    cmd = f'aws ecr get-login-password --region {REGION} | docker login --username AWS --password-stdin {ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com'
-    result = run_cmd(cmd, check=False)
+    # Decode base64 'AWS:password'
+    decoded = base64.b64decode(token).decode("utf-8")
+    username, password = decoded.split(":", 1)
 
-    if result.returncode == 0:
-        print("  Docker authenticated to ECR ✅")
-    else:
-        print("  Trying alternative authentication...")
-        # Alternative: pipe the token directly
-        import base64
-        auth_token = token["authorizationData"][0]["authorizationToken"]
-        decoded = base64.b64decode(auth_token).decode("utf-8")
-        password = decoded.split(":")[1]
-        cmd2 = f'echo {password} | docker login --username AWS --password-stdin {ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com'
-        result2 = run_cmd(cmd2, check=True)
-        print("  Docker authenticated to ECR ✅")
+    registry = f"{ACCOUNT_ID}.dkr.ecr.{REGION}.amazonaws.com"
+
+    docker_bin = r"C:\Program Files\Docker\Docker\resources\bin"
+    env = os.environ.copy()
+    if docker_bin not in env.get("PATH", ""):
+        env["PATH"] = docker_bin + os.pathsep + env.get("PATH", "")
+
+    cmd = [os.path.join(docker_bin, "docker.exe"), "login", "--username", username, "--password-stdin", registry]
+    print(f"  $ docker login --username AWS --password-stdin {registry}")
+
+    proc = subprocess.run(cmd, input=password.encode("utf-8"), capture_output=True, text=False, env=env)
+    stdout = proc.stdout.decode("utf-8", errors="ignore")
+    stderr = proc.stderr.decode("utf-8", errors="ignore")
+
+    if stdout.strip():
+        print(f"    {stdout.strip()}")
+    if proc.returncode != 0:
+        print(f"  ERROR: {stderr.strip()}")
+        sys.exit(1)
+    
+    print("  Docker authenticated to ECR ✅")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
