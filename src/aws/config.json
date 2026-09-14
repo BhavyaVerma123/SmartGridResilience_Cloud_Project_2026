@@ -7,5 +7,18 @@
   "lambda_arn": "arn:aws:lambda:us-east-1:214086774356:function:SmartGrid-MitigationTrigger",
   "iot_thing": "SmartGrid-PMU-Sensor",
   "iot_endpoint": "a3q4osr3jxfsp4-ats.iot.us-east-1.amazonaws.com",
-  "cw_namespace": "SmartGrid/Agents"
+  "cw_namespace": "SmartGrid/Agents",
+  "kinesis_stream": "SmartGrid-PMU-Stream",
+  "kinesis_arn": "arn:aws:kinesis:us-east-1:214086774356:stream/SmartGrid-PMU-Stream",
+  "ecr_repo_uri": "214086774356.dkr.ecr.us-east-1.amazonaws.com/smartgrid-backend",
+  "ecs_cluster": "SmartGrid-Cluster",
+  "ecs_cluster_arn": "arn:aws:ecs:us-east-1:214086774356:cluster/SmartGrid-Cluster",
+  "task_def_arn": "arn:aws:ecs:us-east-1:214086774356:task-definition/SmartGrid-Backend-Task:2",
+  "vpc_id": "vpc-0816cde187b42fb11",
+  "subnet_ids": [
+    "subnet-02d7749d285eb40d0",
+    "subnet-00761b3a30b42326d",
+    "subnet-0a28575e14dfb4a62"
+  ],
+  "sg_id": "sg-030cb874f9b3fda9b"
 }
