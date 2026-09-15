@@ -20,5 +20,7 @@
     "subnet-00761b3a30b42326d",
     "subnet-0a28575e14dfb4a62"
   ],
-  "sg_id": "sg-030cb874f9b3fda9b"
+  "sg_id": "sg-030cb874f9b3fda9b",
+  "fargate_public_ip": "3.236.5.45",
+  "fargate_url": "http://3.236.5.45:8000"
 }

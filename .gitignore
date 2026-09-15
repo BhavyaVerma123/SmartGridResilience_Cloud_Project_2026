@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Large Dataset files (>100MB GitHub limit)
+dataset/raw/
+dataset/processed/msu_ornl_processed.csv
+

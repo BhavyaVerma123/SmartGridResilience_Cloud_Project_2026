@@ -1,0 +1,12 @@
+
+=======================================================
+Model      : Isolation Forest — Anomaly Detection
+Accuracy   : 51.53%
+F1-Score   : 0.5377
+Saved to   : C:\Users\bishw\Cloud Resilience Assessment Framework for Smart Powergrid Systems using Multi-Agent Artificial Intelligence\SmartGridResilience_Cloud_Project_2026\src\ml_model\models\anomaly_detector.pkl
+
+=======================================================
+Model      : Random Forest — Stability Classifier
+Accuracy   : 100.00%
+F1-Score   : 1.0000
+Saved to   : C:\Users\bishw\Cloud Resilience Assessment Framework for Smart Powergrid Systems using Multi-Agent Artificial Intelligence\SmartGridResilience_Cloud_Project_2026\src\ml_model\models\stability_classifier.pkl
