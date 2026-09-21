@@ -24,7 +24,7 @@ import datetime
 # FastAPI
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
 from pydantic import BaseModel
 
 # Add project root to path
@@ -338,6 +338,18 @@ async def run_demo_pipeline(background_tasks: BackgroundTasks):
     }
 
 
+# ── 7. Dashboard ─────────────────────────────────────────────────────────
+
+DASHBOARD_PATH = ROOT / "src" / "frontend" / "dashboard.html"
+
+@app.get("/dashboard", tags=["Dashboard"])
+async def serve_dashboard():
+    """Serve the interactive resilience dashboard."""
+    if DASHBOARD_PATH.exists():
+        return FileResponse(str(DASHBOARD_PATH), media_type="text/html")
+    return HTMLResponse("<h1>Dashboard not found</h1><p>Place dashboard.html in src/frontend/</p>", status_code=404)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  SERVER ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════
@@ -345,6 +357,7 @@ async def run_demo_pipeline(background_tasks: BackgroundTasks):
 if __name__ == "__main__":
     import uvicorn
     print("Starting Smart Grid Resilience API...")
-    print("Dashboard: http://localhost:8000")
-    print("API Docs : http://localhost:8000/docs\n")
+    print("Dashboard : http://localhost:8000/dashboard")
+    print("API Docs  : http://localhost:8000/docs\n")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+

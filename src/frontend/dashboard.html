@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Grid Cloud Resilience Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-main: #0f172a;
+            --bg-card: #1e293b;
+            --border-color: #334155;
+            --text-main: #e2e8f0;
+            --text-muted: #94a3b8;
+            --accent-blue: #3b82f6;
+            --accent-green: #4ade80;
+            --accent-red: #ef4444;
+            --accent-yellow: #eab308;
+            --accent-purple: #a855f7;
+            --border-radius: 12px;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --transition: all 0.3s ease;
+        }
+
+        body {
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        h1, h2, h3, h4 {
+            margin-top: 0;
+            font-weight: 600;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+            flex: 1;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .title-area h1 {
+            color: var(--accent-blue);
+            margin-bottom: 8px;
+            font-size: 28px;
+        }
+
+        .title-area p {
+            color: var(--text-muted);
+            margin: 0;
+            font-size: 14px;
+        }
+
+        .status-area {
+            text-align: right;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+        }
+
+        .clock {
+            font-size: 1.2rem;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            padding: 6px 12px;
+            background-color: rgba(74, 222, 128, 0.1);
+            color: var(--accent-green);
+            border-radius: 20px;
+            border: 1px solid rgba(74, 222, 128, 0.2);
+        }
+        
+        .connection-status.offline {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: var(--accent-red);
+            border-color: rgba(239, 68, 68, 0.2);
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: currentColor;
+            box-shadow: 0 0 8px currentColor;
+        }
+
+        /* Layout Grid */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 20px;
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border-radius: var(--border-radius);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            box-shadow: var(--shadow);
+        }
+
+        .card-title {
+            font-size: 16px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Agent Panel */
+        .agents-panel {
+            grid-column: span 12;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+
+        .agent-card {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .agent-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+        }
+
+        .agent-card.anomaly::before { background-color: var(--accent-red); }
+        .agent-card.mitigation::before { background-color: var(--accent-yellow); }
+        .agent-card.stability::before { background-color: var(--accent-green); }
+
+        .agent-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .agent-icon {
+            font-size: 24px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .agent-status-badge {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            background-color: rgba(74, 222, 128, 0.1);
+            color: var(--accent-green);
+        }
+
+        .agent-details {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .agent-name {
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .agent-model {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .agent-metrics {
+            margin-top: auto;
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        /* AWS Services */
+        .aws-panel {
+            grid-column: span 12;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+
+        .aws-panel-title {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+
+        .service-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+        }
+
+        .service-badge .dot {
+            width: 6px;
+            height: 6px;
+        }
+        
+        .service-badge.active .dot { color: var(--accent-green); }
+        .service-badge.inactive .dot { color: var(--accent-red); }
+
+        /* Controls */
+        .controls-panel {
+            grid-column: span 12;
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            flex: 1;
+            min-width: 200px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 16px;
+            border: none;
+            border-radius: var(--border-radius);
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            color: white;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .btn-attack { background-color: rgba(239, 68, 68, 0.2); border: 1px solid var(--accent-red); color: var(--accent-red); }
+        .btn-attack:hover:not(:disabled) { background-color: var(--accent-red); color: white; }
+        
+        .btn-overload { background-color: rgba(234, 179, 8, 0.2); border: 1px solid var(--accent-yellow); color: var(--accent-yellow); }
+        .btn-overload:hover:not(:disabled) { background-color: var(--accent-yellow); color: #000; }
+        
+        .btn-normal { background-color: rgba(74, 222, 128, 0.2); border: 1px solid var(--accent-green); color: var(--accent-green); }
+        .btn-normal:hover:not(:disabled) { background-color: var(--accent-green); color: #000; }
+        
+        .btn-batch { background-color: rgba(59, 130, 246, 0.2); border: 1px solid var(--accent-blue); color: var(--accent-blue); }
+        .btn-batch:hover:not(:disabled) { background-color: var(--accent-blue); color: white; }
+
+        .spinner {
+            display: none;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: currentColor;
+            animation: spin 1s linear infinite;
+        }
+        
+        .btn.loading .spinner { display: block; }
+        .btn.loading .icon { display: none; }
+
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        /* Pipeline Visualization */
+        .pipeline-panel {
+            grid-column: span 12;
+            padding: 30px 20px;
+        }
+
+        .pipeline-container {
+            display: flex;
+            align-items: stretch;
+            justify-content: space-between;
+            position: relative;
+        }
+
+        /* Connecting line */
+        .pipeline-container::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50px;
+            right: 50px;
+            height: 4px;
+            background-color: var(--border-color);
+            transform: translateY(-50%);
+            z-index: 1;
+        }
+
+        .pipeline-node {
+            position: relative;
+            z-index: 2;
+            width: 18%;
+            background-color: var(--bg-main);
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px 12px;
+            text-align: center;
+            transition: var(--transition);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .node-icon { font-size: 24px; }
+        .node-title { font-size: 14px; font-weight: bold; }
+        .node-data { font-size: 12px; color: var(--text-muted); min-height: 36px; display: flex; flex-direction: column; justify-content: center; }
+
+        /* Node States */
+        .pipeline-node.active { transform: scale(1.05); box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); border-color: var(--accent-blue); }
+        .pipeline-node.success { border-color: var(--accent-green); background-color: rgba(74, 222, 128, 0.05); }
+        .pipeline-node.warning { border-color: var(--accent-yellow); background-color: rgba(234, 179, 8, 0.05); }
+        .pipeline-node.danger { border-color: var(--accent-red); background-color: rgba(239, 68, 68, 0.05); }
+        .pipeline-node.processing { border-color: var(--accent-blue); animation: pulse 1.5s infinite; }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(59, 130, 246, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+        }
+
+        /* Charts */
+        .chart-panel-left { grid-column: span 6; }
+        .chart-panel-right { grid-column: span 6; }
+        
+        .chart-container {
+            position: relative;
+            height: 250px;
+            width: 100%;
+        }
+
+        /* Bottom Row */
+        .table-panel {
+            grid-column: span 8;
+            height: 350px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .distribution-panel {
+            grid-column: span 4;
+            height: 350px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Table */
+        .table-container {
+            flex: 1;
+            overflow-y: auto;
+            margin: 0 -20px -20px -20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            background-color: var(--bg-card);
+            padding: 12px 20px;
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--border-color);
+            z-index: 10;
+        }
+
+        td {
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 14px;
+        }
+
+        tbody tr {
+            transition: background-color 0.2s;
+        }
+
+        tbody tr:hover { background-color: rgba(255, 255, 255, 0.02); }
+        
+        @keyframes highlightRow {
+            0% { background-color: rgba(59, 130, 246, 0.3); }
+            100% { background-color: transparent; }
+        }
+        
+        .new-row { animation: highlightRow 2s ease-out; }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        
+        .badge-normal { background: rgba(74, 222, 128, 0.1); color: var(--accent-green); border: 1px solid var(--accent-green); }
+        .badge-anomaly { background: rgba(239, 68, 68, 0.1); color: var(--accent-red); border: 1px solid var(--accent-red); }
+        .badge-high { background: rgba(239, 68, 68, 0.1); color: var(--accent-red); }
+        .badge-medium { background: rgba(234, 179, 8, 0.1); color: var(--accent-yellow); }
+        .badge-low { background: rgba(59, 130, 246, 0.1); color: var(--accent-blue); }
+        .badge-stable { background: rgba(74, 222, 128, 0.1); color: var(--accent-green); }
+        .badge-unstable { background: rgba(239, 68, 68, 0.1); color: var(--accent-red); border: 1px solid var(--accent-red); }
+
+        /* Footer */
+        footer {
+            margin-top: 40px;
+            text-align: center;
+            padding: 20px 0;
+            color: var(--text-muted);
+            font-size: 14px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .chart-panel-left, .chart-panel-right, .table-panel, .distribution-panel { grid-column: span 12; }
+            .agents-panel { grid-template-columns: 1fr; }
+            .btn { min-width: calc(50% - 8px); }
+            .pipeline-node { width: 100%; margin-bottom: 16px; }
+            .pipeline-container { flex-direction: column; align-items: center; }
+            .pipeline-container::before { width: 4px; height: 100%; top: 0; left: 50%; transform: translateX(-50%); }
+        }
+        
+        @media (max-width: 600px) {
+            .btn { min-width: 100%; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <div class="title-area">
+            <h1>⚡ Smart Grid Cloud Resilience Dashboard</h1>
+            <p>Multi-Agent AI Framework | BCSE355L — Cloud Architecture Design</p>
+        </div>
+        <div class="status-area">
+            <div class="clock" id="clock">00:00:00</div>
+            <div class="connection-status" id="connection-status">
+                <span class="dot"></span>
+                <span id="connection-text">Connecting...</span>
+            </div>
+        </div>
+    </header>
+
+    <div class="dashboard-grid">
+        
+        <!-- Agents Panel -->
+        <div class="agents-panel">
+            <div class="card agent-card anomaly">
+                <div class="agent-header">
+                    <div class="agent-icon">🔍</div>
+                    <div class="agent-status-badge" id="agent1-status">ONLINE</div>
+                </div>
+                <div class="agent-details">
+                    <div class="agent-name">Anomaly Detection Agent</div>
+                    <div class="agent-model">Isolation Forest (anomaly-agent-az1)</div>
+                </div>
+                <div class="agent-metrics">
+                    <span>Latency</span>
+                    <strong id="agent1-latency">-- ms</strong>
+                </div>
+            </div>
+
+            <div class="card agent-card mitigation">
+                <div class="agent-header">
+                    <div class="agent-icon">🛡️</div>
+                    <div class="agent-status-badge" id="agent2-status">ONLINE</div>
+                </div>
+                <div class="agent-details">
+                    <div class="agent-name">Mitigation Engine</div>
+                    <div class="agent-model">AWS Lambda (mitigation-lambda-az1)</div>
+                </div>
+                <div class="agent-metrics">
+                    <span>Latency</span>
+                    <strong id="agent2-latency">-- ms</strong>
+                </div>
+            </div>
+
+            <div class="card agent-card stability">
+                <div class="agent-header">
+                    <div class="agent-icon">⚖️</div>
+                    <div class="agent-status-badge" id="agent3-status">ONLINE</div>
+                </div>
+                <div class="agent-details">
+                    <div class="agent-name">Stability Assessment Agent</div>
+                    <div class="agent-model">Random Forest (stability-agent-az1)</div>
+                </div>
+                <div class="agent-metrics">
+                    <span>Latency</span>
+                    <strong id="agent3-latency">-- ms</strong>
+                </div>
+            </div>
+        </div>
+
+        <!-- AWS Services Panel -->
+        <div class="card aws-panel">
+            <span class="aws-panel-title">AWS Cloud Infrastructure</span>
+            <div class="service-badge active" id="aws-dynamodb"><span class="dot"></span> DynamoDB</div>
+            <div class="service-badge active" id="aws-sns"><span class="dot"></span> SNS</div>
+            <div class="service-badge active" id="aws-lambda"><span class="dot"></span> Lambda</div>
+            <div class="service-badge active" id="aws-cloudwatch"><span class="dot"></span> CloudWatch</div>
+            <div class="service-badge active" id="aws-kinesis"><span class="dot"></span> Kinesis</div>
+            <div class="service-badge active" id="aws-fargate"><span class="dot"></span> Fargate</div>
+            <div class="service-badge active" id="aws-ecr"><span class="dot"></span> ECR</div>
+            <div class="service-badge active" id="aws-iot"><span class="dot"></span> IoT Core</div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls-panel">
+            <button class="btn btn-attack" onclick="runSimulation('attack')" id="btn-attack">
+                <span class="icon">🔴</span> Simulate Cyber Attack
+                <span class="spinner"></span>
+            </button>
+            <button class="btn btn-overload" onclick="runSimulation('overload')" id="btn-overload">
+                <span class="icon">🟡</span> Simulate Line Overload
+                <span class="spinner"></span>
+            </button>
+            <button class="btn btn-normal" onclick="runSimulation('normal')" id="btn-normal">
+                <span class="icon">🟢</span> Simulate Normal Operation
+                <span class="spinner"></span>
+            </button>
+            <button class="btn btn-batch" onclick="runBatch()" id="btn-batch">
+                <span class="icon">🔵</span> Run Batch Detection
+                <span class="spinner"></span>
+            </button>
+        </div>
+
+        <!-- Pipeline -->
+        <div class="card pipeline-panel">
+            <h3 class="card-title">LIVE MULTI-AGENT INFERENCE PIPELINE</h3>
+            <div class="pipeline-container" id="pipeline-container">
+                <div class="pipeline-node" id="node-sensor">
+                    <div class="node-icon">📡</div>
+                    <div class="node-title">PMU Sensor Stream</div>
+                    <div class="node-data" id="data-sensor">Waiting for trigger...</div>
+                </div>
+                <div class="pipeline-node" id="node-anomaly">
+                    <div class="node-icon">🔍</div>
+                    <div class="node-title">Anomaly Detection</div>
+                    <div class="node-data" id="data-anomaly">--</div>
+                </div>
+                <div class="pipeline-node" id="node-mitigation">
+                    <div class="node-icon">🛡️</div>
+                    <div class="node-title">Mitigation Engine</div>
+                    <div class="node-data" id="data-mitigation">--</div>
+                </div>
+                <div class="pipeline-node" id="node-stability">
+                    <div class="node-icon">⚖️</div>
+                    <div class="node-title">Stability Check</div>
+                    <div class="node-data" id="data-stability">--</div>
+                </div>
+                <div class="pipeline-node" id="node-aws">
+                    <div class="node-icon">☁️</div>
+                    <div class="node-title">AWS Logging</div>
+                    <div class="node-data" id="data-aws">--</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="card chart-panel-left">
+            <h3 class="card-title">Anomaly Score Trend</h3>
+            <div class="chart-container">
+                <canvas id="anomalyChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card chart-panel-right">
+            <h3 class="card-title">Grid Stability Probability</h3>
+            <div class="chart-container">
+                <canvas id="stabilityChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Table -->
+        <div class="card table-panel">
+            <h3 class="card-title">Decision Log</h3>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Anomaly Score</th>
+                            <th>Label</th>
+                            <th>Severity</th>
+                            <th>Action Taken</th>
+                            <th>Grid Status</th>
+                            <th>Total Latency</th>
+                        </tr>
+                    </thead>
+                    <tbody id="decision-log">
+                        <!-- Rows injected via JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Distribution -->
+        <div class="card distribution-panel">
+            <h3 class="card-title">Mitigation Actions</h3>
+            <div class="chart-container" style="height: 250px;">
+                <canvas id="actionChart"></canvas>
+            </div>
+        </div>
+
+    </div>
+
+    <footer>
+        Cloud Resilience Assessment Framework © 2026 | BCSE355L — Cloud Architecture Design
+    </footer>
+</div>
+
+<script>
+    // Configuration
+    // Set this to your Fargate URL if hosted, e.g., 'http://<alb-dns-name>'
+    // For same-origin (served by FastAPI), keep empty string.
+    const API_BASE = ''; 
+    
+    // State
+    const maxDataPoints = 20;
+    const chartLabels = Array(maxDataPoints).fill('');
+    const anomalyData = Array(maxDataPoints).fill(0);
+    const stabilityData = Array(maxDataPoints).fill(100);
+    
+    const actionCounts = {
+        'ISOLATE_SUBSTATION': 0,
+        'REROUTE_LOAD': 0,
+        'LOG_ONLY': 0
+    };
+
+    // Initialize Charts
+    Chart.defaults.color = '#94a3b8';
+    Chart.defaults.font.family = "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
+
+    const commonLineOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+            y: { 
+                beginAtZero: true, 
+                max: 100, 
+                grid: { color: '#334155' } 
+            },
+            x: { 
+                grid: { display: false },
+                ticks: { display: false }
+            }
+        },
+        elements: {
+            line: { tension: 0.4, borderWidth: 2 },
+            point: { radius: 2, hoverRadius: 5 }
+        },
+        animation: { duration: 500 }
+    };
+
+    // Anomaly Chart
+    const ctxAnomaly = document.getElementById('anomalyChart').getContext('2d');
+    const anomalyChart = new Chart(ctxAnomaly, {
+        type: 'line',
+        data: {
+            labels: chartLabels,
+            datasets: [{
+                label: 'Anomaly Score',
+                data: anomalyData,
+                borderColor: '#ef4444',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                fill: true
+            }]
+        },
+        options: commonLineOptions
+    });
+
+    // Stability Chart
+    const ctxStability = document.getElementById('stabilityChart').getContext('2d');
+    const stabilityChart = new Chart(ctxStability, {
+        type: 'line',
+        data: {
+            labels: chartLabels,
+            datasets: [{
+                label: 'Stability Probability (%)',
+                data: stabilityData,
+                borderColor: '#4ade80',
+                backgroundColor: 'rgba(74, 222, 128, 0.1)',
+                fill: true
+            }]
+        },
+        options: commonLineOptions
+    });
+
+    // Action Chart (Doughnut)
+    const ctxAction = document.getElementById('actionChart').getContext('2d');
+    const actionChart = new Chart(ctxAction, {
+        type: 'doughnut',
+        data: {
+            labels: ['Isolate Substation', 'Reroute Load', 'Log Only'],
+            datasets: [{
+                data: [0, 0, 0],
+                backgroundColor: ['#ef4444', '#eab308', '#4ade80'],
+                borderWidth: 0,
+                hoverOffset: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '70%',
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
+
+    // Clock updates
+    setInterval(() => {
+        document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+    }, 1000);
+
+    // Initial connection check
+    async function checkConnection() {
+        const statusEl = document.getElementById('connection-status');
+        const textEl = document.getElementById('connection-text');
+        
+        try {
+            // Check health
+            const res = await fetch(`${API_BASE}/agents/status`);
+            if (res.ok) {
+                statusEl.classList.remove('offline');
+                textEl.textContent = 'API Connected';
+            } else {
+                throw new Error('API Error');
+            }
+        } catch (e) {
+            statusEl.classList.add('offline');
+            textEl.textContent = 'Offline - Dev Mode';
+            console.warn("Backend not reachable. Simulating API locally.");
+        }
+    }
+    
+    checkConnection();
+
+    // Reset pipeline UI
+    function resetPipeline() {
+        const nodes = ['sensor', 'anomaly', 'mitigation', 'stability', 'aws'];
+        nodes.forEach(id => {
+            const el = document.getElementById(`node-${id}`);
+            el.className = 'pipeline-node';
+            document.getElementById(`data-${id}`).textContent = '--';
+        });
+        document.getElementById('data-sensor').textContent = 'Generating vector...';
+    }
+
+    // Set node state
+    function setNodeState(id, state, text) {
+        const el = document.getElementById(`node-${id}`);
+        el.className = `pipeline-node ${state}`;
+        if(text) document.getElementById(`data-${id}`).innerHTML = text;
+    }
+
+    // Simulate API delay for UI effect
+    const delay = ms => new Promise(res => setTimeout(res, ms));
+
+    // Run simulation
+    async function runSimulation(type) {
+        // Disable buttons
+        const btns = document.querySelectorAll('.btn');
+        btns.forEach(b => b.disabled = true);
+        
+        const btn = document.getElementById(`btn-${type}`);
+        btn.classList.add('loading');
+
+        resetPipeline();
+        
+        setNodeState('sensor', 'processing', 'Reading PMU sensor data...');
+        
+        let result = null;
+        try {
+            // Attempt to call real backend
+            // In a real scenario, you'd pass type to the backend or use different endpoints
+            const response = await fetch(`${API_BASE}/demo/run?type=${type}`);
+            if (response.ok) {
+                result = await response.json();
+            } else {
+                throw new Error("Backend error");
+            }
+        } catch(e) {
+            // Mock response if backend is unavailable
+            await delay(400);
+            result = generateMockResponse(type);
+        }
+
+        // Animate Pipeline
+        
+        // 1. Sensor
+        await delay(300);
+        setNodeState('sensor', 'success', `Vector ready<br>Time: ${new Date().toLocaleTimeString()}`);
+        
+        // 2. Anomaly
+        setNodeState('anomaly', 'processing', 'Running Isolation Forest...');
+        await delay(400);
+        const anomalyClass = result.step1_anomaly.is_anomaly ? 'danger' : 'success';
+        const score = (result.step1_anomaly.anomaly_score * 100).toFixed(1);
+        setNodeState('anomaly', anomalyClass, `Score: ${score}%<br>Label: ${result.step1_anomaly.label}`);
+        document.getElementById('agent1-latency').textContent = `${result.step1_anomaly.latency_ms.toFixed(1)} ms`;
+        
+        // 3. Mitigation
+        setNodeState('mitigation', 'processing', 'Evaluating rules...');
+        await delay(300);
+        let mitClass = 'success';
+        if (result.step2_mitigation.severity === 'HIGH') mitClass = 'danger';
+        else if (result.step2_mitigation.severity === 'MEDIUM') mitClass = 'warning';
+        
+        setNodeState('mitigation', mitClass, `Action: ${result.step2_mitigation.action_taken}<br>Sev: ${result.step2_mitigation.severity}`);
+        // Mock latency for lambda
+        document.getElementById('agent2-latency').textContent = `${(Math.random()*50 + 20).toFixed(1)} ms`;
+
+        // 4. Stability
+        setNodeState('stability', 'processing', 'Predicting stability...');
+        await delay(400);
+        const stabClass = result.step3_stability.is_stable ? 'success' : 'danger';
+        const pStable = (result.step3_stability.stable_prob * 100).toFixed(1);
+        setNodeState('stability', stabClass, `Prob: ${pStable}%<br>${result.step3_stability.label}`);
+        document.getElementById('agent3-latency').textContent = `${result.step3_stability.latency_ms.toFixed(1)} ms`;
+
+        // 5. AWS
+        setNodeState('aws', 'processing', 'Persisting state...');
+        await delay(200);
+        setNodeState('aws', 'success', 'Logged to DynamoDB<br>Alerts triggered');
+
+        // Update Charts
+        updateCharts(result);
+        
+        // Add to Table
+        addTableRow(result);
+
+        // Re-enable buttons
+        btns.forEach(b => b.disabled = false);
+        btn.classList.remove('loading');
+    }
+
+    // Run Batch
+    async function runBatch() {
+        const btn = document.getElementById('btn-batch');
+        btn.disabled = true;
+        btn.classList.add('loading');
+        
+        try {
+            const res = await fetch(`${API_BASE}/detect/batch?n_samples=5`, {method: 'POST'});
+            if(res.ok) {
+                // Assuming it returns an array or we just simulate multiple rows
+                for(let i=0; i<5; i++) {
+                    await delay(200);
+                    const mock = generateMockResponse(Math.random() > 0.7 ? 'attack' : 'normal');
+                    updateCharts(mock);
+                    addTableRow(mock);
+                }
+            } else { throw new Error('API'); }
+        } catch (e) {
+            for(let i=0; i<5; i++) {
+                await delay(200);
+                const mock = generateMockResponse(Math.random() > 0.7 ? 'attack' : 'normal');
+                updateCharts(mock);
+                addTableRow(mock);
+            }
+        }
+        
+        btn.disabled = false;
+        btn.classList.remove('loading');
+    }
+
+    function updateCharts(result) {
+        const score = result.step1_anomaly.anomaly_score * 100;
+        const stability = result.step3_stability.stable_prob * 100;
+        
+        anomalyData.push(score);
+        anomalyData.shift();
+        
+        stabilityData.push(stability);
+        stabilityData.shift();
+        
+        anomalyChart.update();
+        stabilityChart.update();
+
+        // Update Doughnut
+        const action = result.step2_mitigation.action_taken;
+        if(actionCounts[action] !== undefined) {
+            actionCounts[action]++;
+            actionChart.data.datasets[0].data = [
+                actionCounts['ISOLATE_SUBSTATION'],
+                actionCounts['REROUTE_LOAD'],
+                actionCounts['LOG_ONLY']
+            ];
+            actionChart.update();
+        }
+    }
+
+    function addTableRow(result) {
+        const tbody = document.getElementById('decision-log');
+        
+        const tr = document.createElement('tr');
+        tr.className = 'new-row';
+        
+        const time = new Date().toLocaleTimeString();
+        const aLabel = result.step1_anomaly.label;
+        const aBadge = aLabel === 'ANOMALY' ? 'badge-anomaly' : 'badge-normal';
+        
+        const sev = result.step2_mitigation.severity;
+        const sBadge = `badge-${sev.toLowerCase()}`;
+        
+        const gLabel = result.step3_stability.label;
+        const gBadge = gLabel === 'STABLE' ? 'badge-stable' : 'badge-unstable';
+
+        const lat = (result.step1_anomaly.latency_ms + result.step3_stability.latency_ms + 45).toFixed(1);
+
+        tr.innerHTML = `
+            <td>${time}</td>
+            <td>${(result.step1_anomaly.anomaly_score * 100).toFixed(1)}%</td>
+            <td><span class="badge ${aBadge}">${aLabel}</span></td>
+            <td><span class="badge ${sBadge}">${sev}</span></td>
+            <td>${result.step2_mitigation.action_taken}</td>
+            <td><span class="badge ${gBadge}">${gLabel}</span></td>
+            <td>${lat} ms</td>
+        `;
+
+        tbody.insertBefore(tr, tbody.firstChild);
+        
+        if (tbody.children.length > 20) {
+            tbody.removeChild(tbody.lastChild);
+        }
+    }
+
+    function generateMockResponse(type) {
+        let isAnomaly, score, sev, action, isStable, prob;
+
+        if (type === 'attack') {
+            isAnomaly = true;
+            score = 0.85 + Math.random() * 0.14; // 0.85-0.99
+            sev = 'HIGH';
+            action = 'ISOLATE_SUBSTATION';
+            isStable = false;
+            prob = 0.05 + Math.random() * 0.2;
+        } else if (type === 'overload') {
+            isAnomaly = true;
+            score = 0.65 + Math.random() * 0.15; // 0.65-0.80
+            sev = 'MEDIUM';
+            action = 'REROUTE_LOAD';
+            isStable = Math.random() > 0.5;
+            prob = 0.4 + Math.random() * 0.3;
+        } else {
+            isAnomaly = false;
+            score = 0.1 + Math.random() * 0.3;
+            sev = 'LOW';
+            action = 'LOG_ONLY';
+            isStable = true;
+            prob = 0.85 + Math.random() * 0.14;
+        }
+
+        return {
+            "pipeline": "COMPLETE",
+            "step1_anomaly": {
+                "label": isAnomaly ? "ANOMALY" : "NORMAL",
+                "is_anomaly": isAnomaly,
+                "anomaly_score": score,
+                "latency_ms": 150 + Math.random() * 50
+            },
+            "step2_mitigation": {
+                "severity": sev,
+                "action_taken": action
+            },
+            "step3_stability": {
+                "label": isStable ? "STABLE" : "UNSTABLE",
+                "is_stable": isStable,
+                "stable_prob": prob,
+                "latency_ms": 250 + Math.random() * 100
+            }
+        };
+    }
+
+    // Init table with some mock data
+    for(let i=0; i<3; i++) {
+        addTableRow(generateMockResponse('normal'));
+    }
+
+</script>
+</body>
+</html>
