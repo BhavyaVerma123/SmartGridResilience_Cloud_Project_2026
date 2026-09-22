@@ -1028,6 +1028,102 @@
         addTableRow(generateMockResponse('normal'));
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    //  LIVE SSE STREAM — auto-updates dashboard from /live-feed
+    // ═══════════════════════════════════════════════════════════════
+    
+    let sseConnected = false;
+
+    function connectSSE() {
+        try {
+            const evtSource = new EventSource(`${API_BASE}/live-feed`);
+            
+            evtSource.onopen = function() {
+                sseConnected = true;
+                console.log('[SSE] Connected to live feed');
+                document.getElementById('conn-status').innerHTML = '🟢 LIVE STREAM';
+            };
+            
+            evtSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    // Only process DEMO_RUN events that have pipeline data
+                    if (data.type === 'DEMO_RUN' && data.step1_anomaly) {
+                        updatePipeline(data);
+                        updateCharts(data);
+                        addTableRow(data);
+                        
+                        // Update agent cards with latest latency
+                        const anomalyLatency = document.querySelector('#agent-anomaly .latency');
+                        const stabilityLatency = document.querySelector('#agent-stability .latency');
+                        if (anomalyLatency) anomalyLatency.textContent = data.step1_anomaly.latency_ms.toFixed(1) + ' ms';
+                        if (stabilityLatency) stabilityLatency.textContent = data.step3_stability.latency_ms.toFixed(1) + ' ms';
+                    }
+                } catch(e) {
+                    console.log('[SSE] Parse error:', e);
+                }
+            };
+            
+            evtSource.onerror = function() {
+                sseConnected = false;
+                console.log('[SSE] Connection lost, retrying in 5s...');
+                document.getElementById('conn-status').innerHTML = '🟡 RECONNECTING';
+                evtSource.close();
+                setTimeout(connectSSE, 5000);
+            };
+        } catch(e) {
+            console.log('[SSE] Failed to connect:', e);
+            sseConnected = false;
+            setTimeout(connectSSE, 5000);
+        }
+    }
+
+    // Update pipeline visualization from SSE data
+    function updatePipeline(result) {
+        const steps = document.querySelectorAll('.pipeline-step');
+        if (steps.length < 4) return;
+        
+        // Reset all steps
+        steps.forEach(s => {
+            s.style.borderColor = 'var(--border-color)';
+            s.style.boxShadow = 'none';
+        });
+        
+        // Step 1 - PMU Sensor (always green - data received)
+        steps[0].style.borderColor = 'var(--accent-green)';
+        steps[0].style.boxShadow = '0 0 15px rgba(74, 222, 128, 0.3)';
+        
+        // Step 2 - Anomaly Detection
+        const isAnomaly = result.step1_anomaly.is_anomaly;
+        const anomColor = isAnomaly ? 'var(--accent-red)' : 'var(--accent-green)';
+        steps[1].style.borderColor = anomColor;
+        steps[1].style.boxShadow = `0 0 15px ${isAnomaly ? 'rgba(239,68,68,0.3)' : 'rgba(74,222,128,0.3)'}`;
+        
+        // Step 3 - Mitigation
+        const sev = result.step2_mitigation?.severity || 'LOW';
+        const mColor = sev === 'HIGH' ? 'var(--accent-red)' : sev === 'MEDIUM' ? 'var(--accent-yellow)' : 'var(--accent-green)';
+        steps[2].style.borderColor = mColor;
+        steps[2].style.boxShadow = `0 0 15px ${sev === 'HIGH' ? 'rgba(239,68,68,0.3)' : sev === 'MEDIUM' ? 'rgba(234,179,8,0.3)' : 'rgba(74,222,128,0.3)'}`;
+        
+        // Step 4 - Stability
+        const isStable = result.step3_stability.is_stable;
+        const stabColor = isStable ? 'var(--accent-green)' : 'var(--accent-red)';
+        steps[3].style.borderColor = stabColor;
+        steps[3].style.boxShadow = `0 0 15px ${isStable ? 'rgba(74,222,128,0.3)' : 'rgba(239,68,68,0.3)'}`;
+        
+        // Update values inside pipeline steps
+        const vals = document.querySelectorAll('.pipeline-value');
+        if (vals.length >= 4) {
+            vals[0].textContent = 'Data Received';
+            vals[1].textContent = `Score: ${(result.step1_anomaly.anomaly_score * 100).toFixed(1)}%`;
+            vals[2].textContent = result.step2_mitigation?.action_taken || 'N/A';
+            vals[3].textContent = `${(result.step3_stability.stable_prob * 100).toFixed(1)}% stable`;
+        }
+    }
+
+    // Start SSE connection
+    connectSSE();
+
 </script>
 </body>
 </html>

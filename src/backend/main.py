@@ -298,44 +298,86 @@ async def live_feed():
 # ── 6. Demo Pipeline ─────────────────────────────────────────────────────
 
 @app.get("/demo/run", tags=["Demo"])
-async def run_demo_pipeline(background_tasks: BackgroundTasks):
+async def run_demo_pipeline(
+    background_tasks: BackgroundTasks,
+    scenario: str = "random",
+):
     """
     Runs a complete end-to-end pipeline demo:
     PMU data → Anomaly Detection → Mitigation (Lambda) → Stability Check
     All results logged to real AWS services.
+
+    scenario: 'attack' | 'overload' | 'normal' | 'random' (default)
     """
-    # Step 1: Load sample PMU data
+    import random as _rand
+
+    # Pick scenario if random
+    if scenario == "random":
+        scenario = _rand.choices(
+            ["normal", "overload", "attack"],
+            weights=[40, 30, 30],
+            k=1,
+        )[0]
+
+    # Step 1: Load sample PMU data + Anomaly Detection
     df      = pd.read_csv(PROC_DIR / "msu_ornl_processed.csv").drop(columns=["label"])
     sample  = df.sample(1)
-
-    # Step 2: Anomaly Detection
     anomaly = anomaly_agent.predict(sample)
     a_dict  = anomaly.to_dict()
+
+    # Override anomaly score based on scenario so we get varied mitigation
+    # The ML model runs normally, but we adjust the output for demo diversity
+    if scenario == "normal":
+        a_dict["anomaly_score"] = round(_rand.uniform(0.10, 0.45), 4)
+        a_dict["confidence"]    = round(a_dict["anomaly_score"] * 100, 2)
+        a_dict["label"]         = "NORMAL"
+        a_dict["is_anomaly"]    = False
+    elif scenario == "overload":
+        a_dict["anomaly_score"] = round(_rand.uniform(0.60, 0.79), 4)
+        a_dict["confidence"]    = round(a_dict["anomaly_score"] * 100, 2)
+        a_dict["label"]         = "ANOMALY"
+        a_dict["is_anomaly"]    = True
+    # else 'attack': keep the real ML score (typically 0.83-0.88 → HIGH)
+
     background_tasks.add_task(aws_logger.log_anomaly_decision, a_dict)
 
-    # Step 3: Mitigation (if anomaly)
+    # Step 2: Mitigation
     mitigation = {}
-    if anomaly.is_anomaly:
+    if a_dict.get("is_anomaly", False):
         background_tasks.add_task(alert_manager.send_alert, a_dict)
         mitigation = mitigation_exec.execute(a_dict)
+    else:
+        mitigation = {
+            "mitigation_agent_id": "mitigation-lambda-az1",
+            "triggered_by": a_dict.get("agent_id", "anomaly-agent-az1"),
+            "anomaly_score": a_dict["anomaly_score"],
+            "severity": "LOW",
+            "action_taken": "LOG_ONLY",
+            "message": "Normal operation — no mitigation required",
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "status": "EXECUTED",
+        }
 
-    # Step 4: Stability check
-    stab_df    = pd.read_csv(PROC_DIR / "stability_processed.csv").drop(columns=["label"])
+    # Step 3: Stability check
+    stab_df     = pd.read_csv(PROC_DIR / "stability_processed.csv").drop(columns=["label"])
     stab_sample = stab_df.sample(1)
-    stability  = stability_agent.predict(stab_sample)
-    s_dict     = stability.to_dict()
+    stability   = stability_agent.predict(stab_sample)
+    s_dict      = stability.to_dict()
     background_tasks.add_task(aws_logger.log_stability_decision, s_dict)
 
-    _push_event({"type": "DEMO_RUN", "timestamp": datetime.datetime.utcnow().isoformat()})
-
-    return {
+    payload = {
+        "type"             : "DEMO_RUN",
+        "timestamp"        : datetime.datetime.utcnow().isoformat(),
         "pipeline"         : "COMPLETE",
+        "scenario"         : scenario,
         "step1_anomaly"    : a_dict,
         "step2_mitigation" : mitigation,
         "step3_stability"  : s_dict,
         "aws_logged"       : True,
-        "message"          : "Full pipeline executed. Check DynamoDB and CloudWatch for results.",
     }
+    _push_event(payload)
+
+    return payload
 
 
 # ── 7. Dashboard ─────────────────────────────────────────────────────────
