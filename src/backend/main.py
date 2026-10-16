@@ -14,6 +14,7 @@ import asyncio
 import datetime
 import json
 import logging
+import os
 import sys
 import re
 import time
@@ -24,6 +25,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 import pandas as pd
 
@@ -58,6 +60,36 @@ request_id_context: ContextVar[str] = ContextVar("request_id", default="")
 logger = logging.getLogger(__name__)
 
 PROC_DIR = ROOT / "dataset" / "processed"
+
+def _get_trusted_origins() -> list[str]:
+    """Read and validate exact browser origins allowed to call this API."""
+    configured_origins = os.getenv("SMARTGRID_CORS_ORIGINS")
+    if configured_origins is None:
+        return ["http://localhost:8000", "http://127.0.0.1:8000"]
+
+    origins = [
+        origin.strip().rstrip("/")
+        for origin in configured_origins.split(",")
+        if origin.strip()
+    ]
+    if not origins:
+        raise RuntimeError("SMARTGRID_CORS_ORIGINS must contain at least one trusted origin.")
+
+    for origin in origins:
+        parsed = urlsplit(origin)
+        if (
+            "*" in origin
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RuntimeError(
+                "SMARTGRID_CORS_ORIGINS must be a comma-separated list of exact "
+                "http(s) origins without paths, query strings, fragments, or wildcards."
+            )
+    return origins
 
 
 @lru_cache(maxsize=2)
@@ -114,7 +146,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = ["*"],
+    allow_origins     = _get_trusted_origins(),
     allow_credentials = True,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
@@ -312,15 +344,20 @@ async def assess_stability(state: GridStateReading, background_tasks: Background
 
 @app.get("/agents/status", tags=["Agent Management"])
 async def get_agent_status():
-    """Report local agent health and AWS client configuration, not live AWS checks."""
+    """Report local agent health and separate AWS configuration from connectivity."""
+    aws_state = {
+        "configuration": "configured",
+        "connectivity": "not_checked",
+        "message": "Client initialized; remote service connectivity has not been verified.",
+    }
     return {
         "anomaly_detection_agent" : anomaly_agent.status(),
         "stability_assessment_agent": stability_agent.status(),
         "aws_services": {
-            "dynamodb" : "configured",
-            "sns"      : "configured",
-            "lambda"   : "configured",
-            "cloudwatch": "configured",
+            "dynamodb": aws_state.copy(),
+            "sns": aws_state.copy(),
+            "lambda": aws_state.copy(),
+            "cloudwatch": aws_state.copy(),
         },
         "server_time": datetime.datetime.now(datetime.UTC).isoformat(),
         "uptime"     : "active",

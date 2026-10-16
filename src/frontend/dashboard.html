@@ -244,6 +244,13 @@
             width: 6px;
             height: 6px;
         }
+
+        .service-state {
+            color: var(--accent-blue);
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
         
         .service-badge.active .dot { color: var(--accent-green); }
         .service-badge.inactive .dot { color: var(--accent-red); }
@@ -577,10 +584,10 @@
         <!-- AWS Services Panel -->
         <div class="card aws-panel">
             <span class="aws-panel-title">AWS Cloud Infrastructure</span>
-            <div class="service-badge unknown" id="aws-dynamodb"><span class="dot"></span> DynamoDB</div>
-            <div class="service-badge unknown" id="aws-sns"><span class="dot"></span> SNS</div>
-            <div class="service-badge unknown" id="aws-lambda"><span class="dot"></span> Lambda</div>
-            <div class="service-badge unknown" id="aws-cloudwatch"><span class="dot"></span> CloudWatch</div>
+            <div class="service-badge unknown" id="aws-dynamodb"><span class="dot"></span> DynamoDB <span class="service-state">Unknown</span></div>
+            <div class="service-badge unknown" id="aws-sns"><span class="dot"></span> SNS <span class="service-state">Unknown</span></div>
+            <div class="service-badge unknown" id="aws-lambda"><span class="dot"></span> Lambda <span class="service-state">Unknown</span></div>
+            <div class="service-badge unknown" id="aws-cloudwatch"><span class="dot"></span> CloudWatch <span class="service-state">Unknown</span></div>
             <div class="service-badge unknown" id="aws-kinesis"><span class="dot"></span> Kinesis</div>
             <div class="service-badge unknown" id="aws-fargate"><span class="dot"></span> Fargate</div>
             <div class="service-badge unknown" id="aws-ecr"><span class="dot"></span> ECR</div>
@@ -876,14 +883,24 @@
             const res = await fetch(`${API_BASE}/agents/status`);
             if (res.ok) {
                 const status = await res.json();
-                Object.entries(status.aws_services || {}).forEach(([service, state]) => {
+                Object.entries(status.aws_services || {}).forEach(([service, serviceStatus]) => {
                     const badge = document.getElementById(`aws-${service}`);
                     if (!badge) return;
-                    badge.className = `service-badge ${state}`;
-                    badge.title = state === 'configured'
-                        ? 'Client configured; live connectivity has not been checked.'
-                        : `Service status: ${state}`;
-                    badge.setAttribute('aria-label', `${service}: ${state}`);
+                    const configuration = typeof serviceStatus === 'string'
+                        ? serviceStatus
+                        : serviceStatus.configuration;
+                    const connectivity = typeof serviceStatus === 'string'
+                        ? 'not_checked'
+                        : serviceStatus.connectivity;
+                    const stateLabel = configuration === 'configured' ? 'Configured' : 'Unknown';
+                    const connectivityLabel = connectivity === 'not_checked'
+                        ? 'Connectivity not checked'
+                        : `Connectivity: ${connectivity}`;
+                    badge.className = `service-badge ${configuration === 'configured' ? 'configured' : 'unknown'}`;
+                    badge.querySelector('.service-state').textContent =
+                        `${stateLabel} · ${connectivityLabel}`;
+                    badge.title = `${stateLabel}. ${connectivityLabel}.`;
+                    badge.setAttribute('aria-label', `${service}: ${stateLabel}; ${connectivityLabel}`);
                 });
                 statusEl.classList.remove('offline');
                 textEl.textContent = 'API Connected';

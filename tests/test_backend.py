@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import tempfile
 import threading
 import time
@@ -64,6 +65,48 @@ class FakeDemoIdempotencyStore:
 
 
 class BackendHelperTests(unittest.TestCase):
+    def test_cors_origins_are_explicit_and_validated(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                main._get_trusted_origins(),
+                ["http://localhost:8000", "http://127.0.0.1:8000"],
+            )
+
+        with patch.dict(
+            os.environ,
+            {"SMARTGRID_CORS_ORIGINS": "https://dashboard.example.com, https://admin.example.com"},
+        ):
+            self.assertEqual(
+                main._get_trusted_origins(),
+                ["https://dashboard.example.com", "https://admin.example.com"],
+            )
+
+        for invalid_origins in (
+            "*",
+            "",
+            "https://example.com/dashboard",
+            "https://*.example.com",
+        ):
+            with self.subTest(origins=invalid_origins), patch.dict(
+                os.environ,
+                {"SMARTGRID_CORS_ORIGINS": invalid_origins},
+            ):
+                with self.assertRaises(RuntimeError):
+                    main._get_trusted_origins()
+
+    def test_agent_status_does_not_claim_aws_connectivity(self):
+        agent = Mock()
+        agent.status.return_value = {"state": "healthy"}
+        with (
+            patch.object(main, "anomaly_agent", agent),
+            patch.object(main, "stability_agent", agent),
+        ):
+            status = asyncio.run(main.get_agent_status())
+
+        for service_status in status["aws_services"].values():
+            self.assertEqual(service_status["configuration"], "configured")
+            self.assertEqual(service_status["connectivity"], "not_checked")
+
     def test_demo_run_is_post_only(self):
         route = next(
             route for route in main.app.routes
