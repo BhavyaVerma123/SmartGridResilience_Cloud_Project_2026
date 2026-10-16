@@ -1184,7 +1184,9 @@
         };
     }
 
-    // Init table with some mock data
+    // Init table and CloudWatch metrics with initial data
+    const initialMock = generateMockResponse('normal');
+    updateCloudWatchMetrics(initialMock);
     for(let i=0; i<3; i++) {
         addTableRow(generateMockResponse('normal'));
     }
@@ -1202,7 +1204,10 @@
             evtSource.onopen = function() {
                 sseConnected = true;
                 console.log('[SSE] Connected to live feed');
-                document.getElementById('conn-status').innerHTML = '🟢 LIVE STREAM';
+                const connText = document.getElementById('connection-text');
+                const connStatus = document.getElementById('connection-status');
+                if (connText) connText.textContent = '🟢 LIVE STREAM';
+                if (connStatus) connStatus.classList.remove('offline');
             };
             
             evtSource.onmessage = function(event) {
@@ -1230,7 +1235,10 @@
             evtSource.onerror = function() {
                 sseConnected = false;
                 console.log('[SSE] Connection lost, retrying in 5s...');
-                document.getElementById('conn-status').innerHTML = '🟡 RECONNECTING';
+                const connText = document.getElementById('connection-text');
+                const connStatus = document.getElementById('connection-status');
+                if (connText) connText.textContent = '🟡 RECONNECTING';
+                if (connStatus) connStatus.classList.add('offline');
                 evtSource.close();
                 setTimeout(connectSSE, 5000);
             };
@@ -1243,45 +1251,32 @@
 
     // Update pipeline visualization from SSE data
     function updatePipeline(result) {
-        const steps = document.querySelectorAll('.pipeline-step');
-        if (steps.length < 4) return;
-        
-        // Reset all steps
-        steps.forEach(s => {
-            s.style.borderColor = 'var(--border-color)';
-            s.style.boxShadow = 'none';
-        });
-        
-        // Step 1 - PMU Sensor (always green - data received)
-        steps[0].style.borderColor = 'var(--accent-green)';
-        steps[0].style.boxShadow = '0 0 15px rgba(74, 222, 128, 0.3)';
-        
-        // Step 2 - Anomaly Detection
-        const isAnomaly = result.step1_anomaly.is_anomaly;
-        const anomColor = isAnomaly ? 'var(--accent-red)' : 'var(--accent-green)';
-        steps[1].style.borderColor = anomColor;
-        steps[1].style.boxShadow = `0 0 15px ${isAnomaly ? 'rgba(239,68,68,0.3)' : 'rgba(74,222,128,0.3)'}`;
-        
-        // Step 3 - Mitigation
-        const sev = result.step2_mitigation?.severity || 'LOW';
-        const mColor = sev === 'HIGH' ? 'var(--accent-red)' : sev === 'MEDIUM' ? 'var(--accent-yellow)' : 'var(--accent-green)';
-        steps[2].style.borderColor = mColor;
-        steps[2].style.boxShadow = `0 0 15px ${sev === 'HIGH' ? 'rgba(239,68,68,0.3)' : sev === 'MEDIUM' ? 'rgba(234,179,8,0.3)' : 'rgba(74,222,128,0.3)'}`;
-        
-        // Step 4 - Stability
-        const isStable = result.step3_stability.is_stable;
-        const stabColor = isStable ? 'var(--accent-green)' : 'var(--accent-red)';
-        steps[3].style.borderColor = stabColor;
-        steps[3].style.boxShadow = `0 0 15px ${isStable ? 'rgba(74,222,128,0.3)' : 'rgba(239,68,68,0.3)'}`;
-        
-        // Update values inside pipeline steps
-        const vals = document.querySelectorAll('.pipeline-value');
-        if (vals.length >= 4) {
-            vals[0].textContent = 'Data Received';
-            vals[1].textContent = `Score: ${(result.step1_anomaly.anomaly_score * 100).toFixed(1)}%`;
-            vals[2].textContent = result.step2_mitigation?.action_taken || 'N/A';
-            vals[3].textContent = `${(result.step3_stability.stable_prob * 100).toFixed(1)}% stable`;
-        }
+        if (!result || !result.step1_anomaly || !result.step2_mitigation || !result.step3_stability) return;
+
+        // 1. PMU Sensor Node
+        setNodeState('sensor', 'success', `Stream Ingested<br>Time: ${new Date().toLocaleTimeString()}`);
+
+        // 2. Anomaly Detection Node
+        const isAnomaly = Boolean(result.step1_anomaly.is_anomaly);
+        const aClass = isAnomaly ? 'danger' : 'success';
+        const aScorePct = (Number(result.step1_anomaly.anomaly_score || 0) * 100).toFixed(1);
+        setNodeState('anomaly', aClass, `Score: ${aScorePct}%<br>Label: ${result.step1_anomaly.label}`);
+
+        // 3. Mitigation Node
+        const sev = result.step2_mitigation.severity || 'LOW';
+        let mClass = 'success';
+        if (sev === 'HIGH') mClass = 'danger';
+        else if (sev === 'MEDIUM') mClass = 'warning';
+        setNodeState('mitigation', mClass, `Action: ${result.step2_mitigation.action_taken || 'LOG_ONLY'}<br>Sev: ${sev}`);
+
+        // 4. Stability Node
+        const isStable = Boolean(result.step3_stability.is_stable);
+        const sClass = isStable ? 'success' : 'danger';
+        const sProbPct = (Number(result.step3_stability.stable_prob || 0) * 100).toFixed(1);
+        setNodeState('stability', sClass, `Prob: ${sProbPct}%<br>${result.step3_stability.label}`);
+
+        // 5. AWS Node
+        setNodeState('aws', 'success', 'Logged to DynamoDB<br>Metrics pushed to CW');
     }
 
     // Start SSE connection
