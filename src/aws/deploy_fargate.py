@@ -251,7 +251,7 @@ def wait_for_service():
                                 print(f"  Public IP  : {public_ip}")
                                 print(f"  API URL    : http://{public_ip}:8000")
                                 print(f"  Swagger UI : http://{public_ip}:8000/docs")
-                                print(f"  Demo       : http://{public_ip}:8000/demo/run")
+                                print(f"  Dashboard  : http://{public_ip}:8000/dashboard")
                                 print(f"  {'='*50}")
 
                                 # Save to config

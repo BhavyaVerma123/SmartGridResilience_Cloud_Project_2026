@@ -72,7 +72,7 @@ python -m pip install -r requirements.txt
 python -m uvicorn src.backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open the dashboard at `http://127.0.0.1:8000/dashboard` and API documentation at `http://127.0.0.1:8000/docs`. AWS credentials should be supplied through the standard boto3 credential chain (for example, an AWS profile or an ECS task role); do not put credentials in source or `config.json`.
+Open the dashboard at `http://127.0.0.1:8000/dashboard` and API documentation at `http://127.0.0.1:8000/docs`. `/demo/run` is a `POST` endpoint because it can trigger mitigation and external side effects. For example, run `Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/demo/run?scenario=normal" -Headers @{"X-Request-ID" = [guid]::NewGuid().ToString()}` from PowerShell. AWS credentials should be supplied through the standard boto3 credential chain (for example, an AWS profile or an ECS task role); do not put credentials in source or `config.json`.
 
 To run the regression tests:
 
@@ -86,7 +86,7 @@ For a repeatable sequential API latency sample (warm-up requests excluded), run 
 python scripts/benchmark_api.py --url http://127.0.0.1:8000/agents/status --warmup 5 --requests 100
 ```
 
-The script reports p50, p95, p99, maximum, and failed request counts. Use the same endpoint, machine, Python/dependency versions, server configuration, warm-up, request count, and representative input when comparing runs. `/agents/status` measures API overhead only. Measure end-to-end assessment separately with `/demo/run?scenario=random`; that route may invoke AWS Lambda and must only be benchmarked against a safe test environment with the required datasets and AWS permissions. Backend JSON request logs include server-side response timing and correlation IDs for comparing the frontend/network/API request path. Do not treat model latency as end-to-end latency.
+The script reports p50, p95, p99, maximum, and failed request counts. Use the same endpoint, machine, Python/dependency versions, server configuration, warm-up, request count, and representative input when comparing runs. `/agents/status` measures API overhead only. Measure end-to-end assessment separately by sending a `POST` request to `/demo/run?scenario=random`; that route may invoke AWS Lambda and must only be benchmarked against a safe test environment with the required datasets and AWS permissions. Backend JSON request logs include server-side response timing and correlation IDs for comparing the frontend/network/API request path. Do not treat model latency as end-to-end latency.
 
 ### Measurements and Limitations
 

@@ -173,13 +173,18 @@ def send_to_cloudwatch(scenario: str, reading: dict):
 
 
 def call_demo_api():
-    """Call the /demo/run endpoint and return the result."""
+    """POST to /demo/run and return the result."""
     try:
         if requests:
-            resp = requests.get(f"{API_URL}/demo/run", timeout=15)
+            resp = requests.post(f"{API_URL}/demo/run", timeout=15)
             return resp.json()
         else:
-            req = urllib.request.urlopen(f"{API_URL}/demo/run", timeout=15)
+            request = urllib.request.Request(
+                f"{API_URL}/demo/run",
+                data=b"",
+                method="POST",
+            )
+            req = urllib.request.urlopen(request, timeout=15)
             return json.loads(req.read().decode("utf-8"))
     except Exception as e:
         print(f"  [!] API error: {e}")

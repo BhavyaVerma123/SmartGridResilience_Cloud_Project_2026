@@ -64,6 +64,13 @@ class FakeDemoIdempotencyStore:
 
 
 class BackendHelperTests(unittest.TestCase):
+    def test_demo_run_is_post_only(self):
+        route = next(
+            route for route in main.app.routes
+            if getattr(route, "path", None) == "/demo/run"
+        )
+        self.assertEqual(route.methods, {"POST"})
+
     def test_dynamodb_demo_claims_are_conditional_and_read_consistently(self):
         class ConditionalCheckFailed(Exception):
             pass

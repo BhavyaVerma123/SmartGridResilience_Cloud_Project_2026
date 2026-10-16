@@ -973,7 +973,7 @@
         try {
             const result = await fetchJson(
                 `${API_BASE}/demo/run?scenario=${encodeURIComponent(type)}`,
-                {headers: {'X-Request-ID': requestId}}
+                {method: 'POST', headers: {'X-Request-ID': requestId}}
             );
             if (!result.step1_anomaly || !result.step2_mitigation || !result.step3_stability) {
                 throw new Error('The backend returned an incomplete assessment.');

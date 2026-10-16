@@ -200,7 +200,7 @@ async def root():
         <li><a href="/docs" style="color:#60a5fa">📖 Interactive API Docs (Swagger)</a></li>
         <li><a href="/agents/status" style="color:#60a5fa">🤖 Agent Status</a></li>
         <li><a href="/decisions/recent" style="color:#60a5fa">📋 Recent Decisions (DynamoDB)</a></li>
-        <li><a href="/demo/run" style="color:#60a5fa">🚀 Run Full Demo Pipeline</a></li>
+        <li><a href="/dashboard" style="color:#60a5fa">🚀 Open Resilience Dashboard</a></li>
       </ul>
     </body></html>
     """
@@ -395,7 +395,7 @@ async def live_feed(request: Request):
 
 # ── 6. Demo Pipeline ─────────────────────────────────────────────────────
 
-@app.get("/demo/run", tags=["Demo"])
+@app.post("/demo/run", tags=["Demo"])
 async def run_demo_pipeline(
     background_tasks: BackgroundTasks,
     scenario: Literal["attack", "overload", "normal", "random"] = "random",
