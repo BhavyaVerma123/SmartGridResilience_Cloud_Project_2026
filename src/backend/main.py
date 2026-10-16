@@ -55,8 +55,6 @@ mitigation_exec : Optional[MitigationExecutor]      = None
 live_events: deque[dict] = deque(maxlen=50)
 event_counter = 0
 request_id_context: ContextVar[str] = ContextVar("request_id", default="")
-demo_request_tasks: dict[str, asyncio.Task] = {}
-demo_request_lock = asyncio.Lock()
 logger = logging.getLogger(__name__)
 
 PROC_DIR = ROOT / "dataset" / "processed"
@@ -409,33 +407,75 @@ async def run_demo_pipeline(
 
     scenario: descriptive run label; model predictions remain unmodified.
     """
-    request_id = request_id_context.get() or uuid.uuid4().hex
-    async with demo_request_lock:
-        task = demo_request_tasks.get(request_id)
-        if task is None:
-            if len(demo_request_tasks) >= 128:
-                for completed_id, completed_task in list(demo_request_tasks.items()):
-                    if completed_task.done():
-                        del demo_request_tasks[completed_id]
-                        if len(demo_request_tasks) < 128:
-                            break
-            if len(demo_request_tasks) >= 128:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Assessment capacity is busy; retry with the same X-Request-ID.",
-                )
-            task = asyncio.create_task(_execute_demo_pipeline(background_tasks, scenario))
-            demo_request_tasks[request_id] = task
+    if aws_logger is None:
+        raise HTTPException(status_code=503, detail="The shared idempotency store is unavailable.")
 
+    request_id = request_id_context.get() or uuid.uuid4().hex
+    owner_token = uuid.uuid4().hex
+    while True:
+        claimed = await run_in_threadpool(
+            aws_logger.claim_demo_request,
+            request_id,
+            owner_token,
+        )
+        if claimed:
+            task = asyncio.create_task(
+                _execute_and_store_demo(
+                    request_id,
+                    owner_token,
+                    background_tasks,
+                    scenario,
+                )
+            )
+            return await asyncio.shield(task)
+
+        record = await run_in_threadpool(aws_logger.get_demo_request, request_id)
+        if record and record["status"] == "COMPLETE":
+            return record["result"]
+        if record and record["status"] == "FAILED":
+            detail = record["result"].get(
+                "detail",
+                "The assessment failed. Use a new request ID to start another run.",
+            )
+            raise HTTPException(status_code=503, detail=detail)
+        await asyncio.sleep(0.25)
+
+
+async def _execute_and_store_demo(
+    request_id: str,
+    owner_token: str,
+    background_tasks: BackgroundTasks,
+    scenario: Literal["attack", "overload", "normal", "random"],
+) -> dict:
+    """Run a claimed assessment and persist its result for other workers."""
     try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        raise
+        result = await _execute_demo_pipeline(background_tasks, scenario)
     except Exception:
-        async with demo_request_lock:
-            if demo_request_tasks.get(request_id) is task:
-                del demo_request_tasks[request_id]
+        if aws_logger is not None:
+            try:
+                await run_in_threadpool(
+                    aws_logger.finish_demo_request,
+                    request_id,
+                    owner_token,
+                    "FAILED",
+                    {"detail": "The assessment failed. Use a new request ID to retry."},
+                )
+            except Exception:
+                logger.exception("Could not persist failed demo request %s", request_id)
         raise
+
+    if aws_logger is None or not await run_in_threadpool(
+        aws_logger.finish_demo_request,
+        request_id,
+        owner_token,
+        "COMPLETE",
+        result,
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Assessment finished, but its shared result could not be stored.",
+        )
+    return result
 
 
 async def _execute_demo_pipeline(

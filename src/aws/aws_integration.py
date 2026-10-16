@@ -22,6 +22,7 @@ import boto3
 import datetime
 import os
 from pathlib import Path
+from typing import Optional
 
 # ─── Load config ──────────────────────────────────────────────────────────
 CONFIG_PATH = Path(__file__).parent / "config.json"
@@ -60,6 +61,85 @@ class AWSLogger:
         self._cw  = boto3.client("cloudwatch", region_name=REGION)
         self._table     = CFG["dynamodb_table"]
         self._namespace = CFG["cw_namespace"]
+
+    def claim_demo_request(self, request_id: str, owner_token: str) -> bool:
+        """Atomically claim a demo request shared by every worker."""
+        now = int(time.time())
+        try:
+            self._ddb.put_item(
+                TableName=self._table,
+                Item={
+                    "agent_id": {"S": f"demo-request#{request_id}"},
+                    "timestamp": {"S": "DEMO_RUN"},
+                    "status": {"S": "IN_PROGRESS"},
+                    "owner_token": {"S": owner_token},
+                    "ttl": {"N": str(now + 7 * 24 * 60 * 60)},
+                },
+                ConditionExpression="attribute_not_exists(agent_id) OR #ttl <= :now",
+                ExpressionAttributeNames={"#ttl": "ttl"},
+                ExpressionAttributeValues={":now": {"N": str(now)}},
+            )
+            return True
+        except self._ddb.exceptions.ConditionalCheckFailedException:
+            return False
+
+    def get_demo_request(self, request_id: str) -> Optional[dict]:
+        """Read an idempotency record consistently across workers."""
+        response = self._ddb.get_item(
+            TableName=self._table,
+            Key={
+                "agent_id": {"S": f"demo-request#{request_id}"},
+                "timestamp": {"S": "DEMO_RUN"},
+            },
+            ConsistentRead=True,
+        )
+        item = response.get("Item")
+        if not item:
+            return None
+
+        result = json.loads(item["result"]["S"]) if "result" in item else None
+        return {
+            "status": item["status"]["S"],
+            "expires_at": int(item["ttl"]["N"]),
+            "result": result,
+        }
+
+    def finish_demo_request(
+        self,
+        request_id: str,
+        owner_token: str,
+        status: str,
+        result: dict,
+    ) -> bool:
+        """Persist a request result only if this worker still owns its claim."""
+        if status not in {"COMPLETE", "FAILED"}:
+            raise ValueError(f"Unsupported demo request status: {status}")
+
+        try:
+            self._ddb.update_item(
+                TableName=self._table,
+                Key={
+                    "agent_id": {"S": f"demo-request#{request_id}"},
+                    "timestamp": {"S": "DEMO_RUN"},
+                },
+                UpdateExpression="SET #status = :status, #result = :result, #ttl = :ttl REMOVE owner_token",
+                ConditionExpression="#status = :in_progress AND owner_token = :owner",
+                ExpressionAttributeNames={
+                    "#status": "status",
+                    "#result": "result",
+                    "#ttl": "ttl",
+                },
+                ExpressionAttributeValues={
+                    ":status": {"S": status},
+                    ":result": {"S": json.dumps(result)},
+                    ":ttl": {"N": str(int(time.time()) + 24 * 60 * 60)},
+                    ":in_progress": {"S": "IN_PROGRESS"},
+                    ":owner": {"S": owner_token},
+                },
+            )
+            return True
+        except self._ddb.exceptions.ConditionalCheckFailedException:
+            return False
 
     def log_anomaly_decision(self, result: dict) -> bool:
         """

@@ -1,10 +1,13 @@
 import asyncio
+import json
 import tempfile
 import threading
+import time
 import unittest
 from collections import deque
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pandas as pd
 from fastapi import BackgroundTasks
@@ -12,7 +15,88 @@ from fastapi import BackgroundTasks
 from src.backend import main
 
 
+class FakeDemoIdempotencyStore:
+    def __init__(self):
+        self.records = {}
+        self.lock = threading.Lock()
+
+    def claim_demo_request(self, request_id, owner_token):
+        with self.lock:
+            record = self.records.get(request_id)
+            if record and record["expires_at"] > time.time():
+                return False
+            self.records[request_id] = {
+                "status": "IN_PROGRESS",
+                "owner_token": owner_token,
+                "expires_at": time.time() + 7 * 24 * 60 * 60,
+            }
+            return True
+
+    def get_demo_request(self, request_id):
+        with self.lock:
+            record = self.records.get(request_id)
+            if not record:
+                return None
+            return {
+                "status": record["status"],
+                "expires_at": record["expires_at"],
+                "result": record.get("result"),
+            }
+
+    def finish_demo_request(self, request_id, owner_token, status, result):
+        with self.lock:
+            record = self.records.get(request_id)
+            if not record or record["owner_token"] != owner_token:
+                return False
+            record.update(
+                status=status,
+                result=result,
+                expires_at=time.time() + 24 * 60 * 60,
+            )
+            record.pop("owner_token")
+            return True
+
+    def log_anomaly_decision(self, _result):
+        return True
+
+    def log_stability_decision(self, _result):
+        return True
+
+
 class BackendHelperTests(unittest.TestCase):
+    def test_dynamodb_demo_claims_are_conditional_and_read_consistently(self):
+        class ConditionalCheckFailed(Exception):
+            pass
+
+        ddb = Mock()
+        ddb.exceptions = SimpleNamespace(
+            ConditionalCheckFailedException=ConditionalCheckFailed
+        )
+        logger = main.AWSLogger.__new__(main.AWSLogger)
+        logger._ddb = ddb
+        logger._table = "test-table"
+
+        self.assertTrue(logger.claim_demo_request("request-1", "owner-1"))
+        claim = ddb.put_item.call_args.kwargs
+        self.assertEqual(claim["TableName"], "test-table")
+        self.assertIn("attribute_not_exists(agent_id)", claim["ConditionExpression"])
+        self.assertEqual(claim["Item"]["agent_id"]["S"], "demo-request#request-1")
+
+        ddb.put_item.side_effect = ConditionalCheckFailed
+        self.assertFalse(logger.claim_demo_request("request-1", "owner-2"))
+
+        response = {"pipeline": "COMPLETE"}
+        ddb.get_item.return_value = {
+            "Item": {
+                "status": {"S": "COMPLETE"},
+                "ttl": {"N": "2000000000"},
+                "result": {"S": json.dumps(response)},
+            }
+        }
+        record = logger.get_demo_request("request-1")
+        self.assertTrue(ddb.get_item.call_args.kwargs["ConsistentRead"])
+        self.assertEqual(record["result"], response)
+
     def test_processed_dataset_is_cached_without_label_column(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             dataset_path = Path(temp_dir) / "msu_ornl_processed.csv"
@@ -88,16 +172,16 @@ class DemoPipelineTests(unittest.IsolatedAsyncioTestCase):
         anomaly_agent = FakeAgent(anomaly_data)
         stability_agent = FakeAgent(stability_data)
         request_token = main.request_id_context.set("demo-test-request")
+        shared_store = FakeDemoIdempotencyStore()
 
         try:
             with (
+                patch.object(main, "aws_logger", shared_store),
                 patch.object(main, "_load_processed_dataset", return_value=frame),
                 patch.object(main, "anomaly_agent", anomaly_agent),
                 patch.object(main, "stability_agent", stability_agent),
-                patch.object(main, "aws_logger"),
                 patch.object(main, "live_events", deque(maxlen=50)),
                 patch.object(main, "event_counter", 0),
-                patch.object(main, "demo_request_tasks", {}),
             ):
                 response, duplicate_response = await asyncio.gather(
                     main.run_demo_pipeline(BackgroundTasks(), scenario="normal"),
@@ -113,8 +197,8 @@ class DemoPipelineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["step1_anomaly"], anomaly_data)
         self.assertEqual(response["step3_stability"], stability_data)
-        self.assertIs(response, duplicate_response)
-        self.assertIs(response, repeated_response)
+        self.assertEqual(response, duplicate_response)
+        self.assertEqual(response, repeated_response)
         self.assertEqual(anomaly_agent.calls, 1)
         self.assertEqual(stability_agent.calls, 1)
         self.assertEqual(response["request_id"], "demo-test-request")
@@ -135,9 +219,10 @@ class DemoPipelineTests(unittest.IsolatedAsyncioTestCase):
             return {"request_id": "cancelled-demo-request"}
 
         request_token = main.request_id_context.set("cancelled-demo-request")
+        shared_store = FakeDemoIdempotencyStore()
         try:
             with (
-                patch.object(main, "demo_request_tasks", {}),
+                patch.object(main, "aws_logger", shared_store),
                 patch.object(main, "_execute_demo_pipeline", execute_demo),
             ):
                 first_request = asyncio.create_task(
