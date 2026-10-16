@@ -10,22 +10,29 @@ API docs:  http://localhost:8000/docs
 ────────────────────────────────────────────────────────────────────────────
 """
 
-import sys
-import os
-import json
 import asyncio
-import numpy as np
-import pandas as pd
-from pathlib import Path
-from typing import Optional
-from contextlib import asynccontextmanager
 import datetime
+import json
+import logging
+import sys
+import re
+import time
+import uuid
+from collections import deque
+from contextvars import ContextVar
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal, Optional
+from contextlib import asynccontextmanager
+
+import pandas as pd
 
 # FastAPI
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 # Add project root to path
 ROOT = Path(__file__).parent.parent.parent
@@ -45,9 +52,36 @@ alert_manager   : Optional[AlertManager]            = None
 mitigation_exec : Optional[MitigationExecutor]      = None
 
 # Live feed event buffer (last 50 events shown on dashboard)
-live_events: list = []
+live_events: deque[dict] = deque(maxlen=50)
+event_counter = 0
+request_id_context: ContextVar[str] = ContextVar("request_id", default="")
+demo_request_tasks: dict[str, asyncio.Task] = {}
+demo_request_lock = asyncio.Lock()
+logger = logging.getLogger(__name__)
 
 PROC_DIR = ROOT / "dataset" / "processed"
+
+
+@lru_cache(maxsize=2)
+def _load_processed_dataset(filename: str) -> pd.DataFrame:
+    """Load a processed dataset once per worker; callers treat it as read-only."""
+    if filename not in {"msu_ornl_processed.csv", "stability_processed.csv"}:
+        raise ValueError(f"Unsupported processed dataset: {filename}")
+
+    path = PROC_DIR / filename
+    if not path.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail=f"Required processed dataset is unavailable: {filename}",
+        )
+
+    frame = pd.read_csv(path)
+    if "label" not in frame.columns:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Processed dataset is missing its label column: {filename}",
+        )
+    return frame.drop(columns=["label"])
 
 
 @asynccontextmanager
@@ -89,6 +123,32 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_request_timing(request: Request, call_next):
+    """Record request latency and a correlation ID without logging payloads."""
+    supplied_id = request.headers.get("x-request-id", "")
+    request_id = supplied_id if re.fullmatch(r"[A-Za-z0-9._-]{1,128}", supplied_id) else uuid.uuid4().hex
+    token = request_id_context.set(request_id)
+    started_at = time.perf_counter()
+    status_code = 500
+
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        logger.info(json.dumps({
+            "event": "api_request",
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": status_code,
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
+        }))
+        request_id_context.reset(token)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  REQUEST / RESPONSE MODELS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -118,9 +178,11 @@ class GridStateReading(BaseModel):
 
 def _push_event(event: dict):
     """Add event to live feed buffer (keeps last 50)."""
+    global event_counter
+    event_counter += 1
+    event["event_id"] = event_counter
+    event["request_id"] = request_id_context.get()
     live_events.append(event)
-    if len(live_events) > 50:
-        live_events.pop(0)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -159,7 +221,7 @@ async def detect_anomaly(reading: PMUReading, background_tasks: BackgroundTasks)
     - Returns structured JSON result
     """
     data = reading.model_dump(exclude={"sensor_id"})
-    result = anomaly_agent.predict(pd.DataFrame([data]))
+    result = await run_in_threadpool(anomaly_agent.predict, pd.DataFrame([data]))
     result_dict = result.to_dict()
 
     # Log to AWS in background (non-blocking)
@@ -181,16 +243,24 @@ async def detect_anomaly(reading: PMUReading, background_tasks: BackgroundTasks)
 
 
 @app.post("/detect/batch", tags=["Anomaly Detection"])
-async def detect_batch(background_tasks: BackgroundTasks, n_samples: int = 10):
+async def detect_batch(
+    background_tasks: BackgroundTasks,
+    n_samples: int = Query(default=10, ge=1, le=100),
+):
     """
     Run anomaly detection on N random samples from the processed dataset.
     Simulates a real-time PMU data stream.
     """
-    df  = pd.read_csv(PROC_DIR / "msu_ornl_processed.csv").drop(columns=["label"])
-    idx = np.random.choice(len(df), size=min(n_samples, 100), replace=False)
-    sample = df.iloc[idx]
+    df = await run_in_threadpool(_load_processed_dataset, "msu_ornl_processed.csv")
+    if df.empty:
+        raise HTTPException(status_code=503, detail="The anomaly dataset contains no samples.")
+    sample = await run_in_threadpool(
+        df.sample,
+        n=min(n_samples, len(df)),
+        replace=False,
+    )
 
-    results = anomaly_agent.predict_batch(sample)
+    results = await run_in_threadpool(anomaly_agent.predict_batch, sample)
     results_dicts = [r.to_dict() for r in results]
 
     anomaly_count = sum(1 for r in results if r.is_anomaly)
@@ -224,7 +294,7 @@ async def assess_stability(state: GridStateReading, background_tasks: Background
     - Logs to DynamoDB + CloudWatch
     - Returns STABLE / UNSTABLE with probability
     """
-    result = stability_agent.predict(state.model_dump())
+    result = await run_in_threadpool(stability_agent.predict, state.model_dump())
     result_dict = result.to_dict()
 
     background_tasks.add_task(aws_logger.log_stability_decision, result_dict)
@@ -244,17 +314,17 @@ async def assess_stability(state: GridStateReading, background_tasks: Background
 
 @app.get("/agents/status", tags=["Agent Management"])
 async def get_agent_status():
-    """Health check for all 3 agents + AWS services."""
+    """Report local agent health and AWS client configuration, not live AWS checks."""
     return {
         "anomaly_detection_agent" : anomaly_agent.status(),
         "stability_assessment_agent": stability_agent.status(),
         "aws_services": {
-            "dynamodb" : "connected",
-            "sns"      : "connected",
-            "lambda"   : "connected",
-            "cloudwatch": "connected",
+            "dynamodb" : "configured",
+            "sns"      : "configured",
+            "lambda"   : "configured",
+            "cloudwatch": "configured",
         },
-        "server_time": datetime.datetime.utcnow().isoformat(),
+        "server_time": datetime.datetime.now(datetime.UTC).isoformat(),
         "uptime"     : "active",
     }
 
@@ -262,12 +332,19 @@ async def get_agent_status():
 # ── 4. DynamoDB — Recent Decisions ────────────────────────────────────────
 
 @app.get("/decisions/recent", tags=["DynamoDB"])
-async def get_recent_decisions(agent_id: str = "anomaly-agent-az1", limit: int = 20):
+async def get_recent_decisions(
+    agent_id: str = "anomaly-agent-az1",
+    limit: int = Query(default=20, ge=1, le=100),
+):
     """
     Fetch the most recent agent decisions from DynamoDB.
     Used by the dashboard to show the live decision log.
     """
-    decisions = aws_logger.get_recent_decisions(agent_id=agent_id, limit=limit)
+    decisions = await run_in_threadpool(
+        aws_logger.get_recent_decisions,
+        agent_id=agent_id,
+        limit=limit,
+    )
     return {
         "agent_id" : agent_id,
         "count"    : len(decisions),
@@ -278,21 +355,44 @@ async def get_recent_decisions(agent_id: str = "anomaly-agent-az1", limit: int =
 # ── 5. Live Feed (Server-Sent Events) ────────────────────────────────────
 
 @app.get("/live-feed", tags=["Dashboard"])
-async def live_feed():
+async def live_feed(request: Request):
     """
     Server-Sent Events stream of real-time agent decisions.
     The frontend dashboard subscribes to this for live updates.
     """
     async def event_generator():
-        last_idx = 0
-        while True:
-            if len(live_events) > last_idx:
-                for event in live_events[last_idx:]:
-                    yield f"data: {json.dumps(event)}\n\n"
-                last_idx = len(live_events)
-            await asyncio.sleep(1)
+        last_event_id = 0
+        supplied_event_id = request.headers.get("last-event-id", "")
+        if supplied_event_id.isdigit():
+            last_event_id = int(supplied_event_id)
+        last_heartbeat = time.monotonic()
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+        while True:
+            if await request.is_disconnected():
+                break
+
+            events = list(live_events)
+            if events:
+                oldest_id = events[0]["event_id"]
+                if last_event_id < oldest_id - 1:
+                    last_event_id = oldest_id - 1
+
+                for event in events:
+                    event_id = event["event_id"]
+                    if event_id > last_event_id:
+                        yield f"id: {event_id}\ndata: {json.dumps(event)}\n\n"
+                        last_event_id = event_id
+
+            if time.monotonic() - last_heartbeat >= 15:
+                yield ": keep-alive\n\n"
+                last_heartbeat = time.monotonic()
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── 6. Demo Pipeline ─────────────────────────────────────────────────────
@@ -300,44 +400,75 @@ async def live_feed():
 @app.get("/demo/run", tags=["Demo"])
 async def run_demo_pipeline(
     background_tasks: BackgroundTasks,
-    scenario: str = "random",
+    scenario: Literal["attack", "overload", "normal", "random"] = "random",
 ):
     """
     Runs a complete end-to-end pipeline demo:
     PMU data → Anomaly Detection → Mitigation (Lambda) → Stability Check
-    All results logged to real AWS services.
+    Logging and alert work is queued for FastAPI background execution.
 
-    scenario: 'attack' | 'overload' | 'normal' | 'random' (default)
+    scenario: descriptive run label; model predictions remain unmodified.
     """
-    import random as _rand
+    request_id = request_id_context.get() or uuid.uuid4().hex
+    async with demo_request_lock:
+        task = demo_request_tasks.get(request_id)
+        if task is None:
+            if len(demo_request_tasks) >= 128:
+                for completed_id, completed_task in list(demo_request_tasks.items()):
+                    if completed_task.done():
+                        del demo_request_tasks[completed_id]
+                        if len(demo_request_tasks) < 128:
+                            break
+            if len(demo_request_tasks) >= 128:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Assessment capacity is busy; retry with the same X-Request-ID.",
+                )
+            task = asyncio.create_task(_execute_demo_pipeline(background_tasks, scenario))
+            demo_request_tasks[request_id] = task
 
-    # Pick scenario if random
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        async with demo_request_lock:
+            if demo_request_tasks.get(request_id) is task:
+                del demo_request_tasks[request_id]
+        raise
+
+
+async def _execute_demo_pipeline(
+    background_tasks: BackgroundTasks,
+    scenario: Literal["attack", "overload", "normal", "random"],
+):
+    """Run one deduplicated demo request and queue its AWS logging."""
+    pipeline_started = time.perf_counter()
     if scenario == "random":
-        scenario = _rand.choices(
+        import random
+        scenario = random.choices(
             ["normal", "overload", "attack"],
             weights=[40, 30, 30],
             k=1,
         )[0]
 
-    # Step 1: Load sample PMU data + Anomaly Detection
-    df      = pd.read_csv(PROC_DIR / "msu_ornl_processed.csv").drop(columns=["label"])
-    sample  = df.sample(1)
-    anomaly = anomaly_agent.predict(sample)
+    # Dataset reads are cached; the two model inferences are independent in
+    # this implementation because stability uses a separate sampled dataset.
+    anomaly_df, stability_df = await asyncio.gather(
+        run_in_threadpool(_load_processed_dataset, "msu_ornl_processed.csv"),
+        run_in_threadpool(_load_processed_dataset, "stability_processed.csv"),
+    )
+    if anomaly_df.empty or stability_df.empty:
+        raise HTTPException(status_code=503, detail="A required assessment dataset contains no samples.")
+    anomaly_sample, stability_sample = await asyncio.gather(
+        run_in_threadpool(anomaly_df.sample, n=1),
+        run_in_threadpool(stability_df.sample, n=1),
+    )
+    anomaly, stability = await asyncio.gather(
+        run_in_threadpool(anomaly_agent.predict, anomaly_sample),
+        run_in_threadpool(stability_agent.predict, stability_sample),
+    )
     a_dict  = anomaly.to_dict()
-
-    # Override anomaly score based on scenario so we get varied mitigation
-    # The ML model runs normally, but we adjust the output for demo diversity
-    if scenario == "normal":
-        a_dict["anomaly_score"] = round(_rand.uniform(0.10, 0.45), 4)
-        a_dict["confidence"]    = round(a_dict["anomaly_score"] * 100, 2)
-        a_dict["label"]         = "NORMAL"
-        a_dict["is_anomaly"]    = False
-    elif scenario == "overload":
-        a_dict["anomaly_score"] = round(_rand.uniform(0.60, 0.79), 4)
-        a_dict["confidence"]    = round(a_dict["anomaly_score"] * 100, 2)
-        a_dict["label"]         = "ANOMALY"
-        a_dict["is_anomaly"]    = True
-    # else 'attack': keep the real ML score (typically 0.83-0.88 → HIGH)
 
     background_tasks.add_task(aws_logger.log_anomaly_decision, a_dict)
 
@@ -345,7 +476,9 @@ async def run_demo_pipeline(
     mitigation = {}
     if a_dict.get("is_anomaly", False):
         background_tasks.add_task(alert_manager.send_alert, a_dict)
-        mitigation = mitigation_exec.execute(a_dict)
+        mitigation_started = time.perf_counter()
+        mitigation = await run_in_threadpool(mitigation_exec.execute, a_dict)
+        mitigation["latency_ms"] = round((time.perf_counter() - mitigation_started) * 1000, 3)
     else:
         mitigation = {
             "mitigation_agent_id": "mitigation-lambda-az1",
@@ -354,26 +487,26 @@ async def run_demo_pipeline(
             "severity": "LOW",
             "action_taken": "LOG_ONLY",
             "message": "Normal operation — no mitigation required",
-            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
             "status": "EXECUTED",
+            "latency_ms": 0.0,
         }
 
-    # Step 3: Stability check
-    stab_df     = pd.read_csv(PROC_DIR / "stability_processed.csv").drop(columns=["label"])
-    stab_sample = stab_df.sample(1)
-    stability   = stability_agent.predict(stab_sample)
+    # Step 3: Stability inference ran concurrently with anomaly inference.
     s_dict      = stability.to_dict()
     background_tasks.add_task(aws_logger.log_stability_decision, s_dict)
 
     payload = {
         "type"             : "DEMO_RUN",
-        "timestamp"        : datetime.datetime.utcnow().isoformat(),
+        "timestamp"        : datetime.datetime.now(datetime.UTC).isoformat(),
         "pipeline"         : "COMPLETE",
         "scenario"         : scenario,
         "step1_anomaly"    : a_dict,
         "step2_mitigation" : mitigation,
         "step3_stability"  : s_dict,
-        "aws_logged"       : True,
+        "pipeline_latency_ms": round((time.perf_counter() - pipeline_started) * 1000, 3),
+        "aws_logged"       : None,
+        "aws_log_status"   : "queued",
     }
     _push_event(payload)
 
@@ -402,4 +535,3 @@ if __name__ == "__main__":
     print("Dashboard : http://localhost:8000/dashboard")
     print("API Docs  : http://localhost:8000/docs\n")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-
