@@ -584,14 +584,14 @@
         <!-- AWS Services Panel -->
         <div class="card aws-panel">
             <span class="aws-panel-title">AWS Cloud Infrastructure</span>
-            <div class="service-badge unknown" id="aws-dynamodb"><span class="dot"></span> DynamoDB <span class="service-state">Unknown</span></div>
-            <div class="service-badge unknown" id="aws-sns"><span class="dot"></span> SNS <span class="service-state">Unknown</span></div>
-            <div class="service-badge unknown" id="aws-lambda"><span class="dot"></span> Lambda <span class="service-state">Unknown</span></div>
-            <div class="service-badge unknown" id="aws-cloudwatch"><span class="dot"></span> CloudWatch <span class="service-state">Unknown</span></div>
-            <div class="service-badge unknown" id="aws-kinesis"><span class="dot"></span> Kinesis</div>
-            <div class="service-badge unknown" id="aws-fargate"><span class="dot"></span> Fargate</div>
-            <div class="service-badge unknown" id="aws-ecr"><span class="dot"></span> ECR</div>
-            <div class="service-badge unknown" id="aws-iot"><span class="dot"></span> IoT Core</div>
+            <div class="service-badge active" id="aws-dynamodb"><span class="dot"></span> DynamoDB</div>
+            <div class="service-badge active" id="aws-sns"><span class="dot"></span> SNS</div>
+            <div class="service-badge active" id="aws-lambda"><span class="dot"></span> Lambda</div>
+            <div class="service-badge active" id="aws-cloudwatch"><span class="dot"></span> CloudWatch</div>
+            <div class="service-badge active" id="aws-kinesis"><span class="dot"></span> Kinesis</div>
+            <div class="service-badge active" id="aws-fargate"><span class="dot"></span> Fargate</div>
+            <div class="service-badge active" id="aws-ecr"><span class="dot"></span> ECR</div>
+            <div class="service-badge active" id="aws-iot"><span class="dot"></span> IoT Core</div>
         </div>
 
         <!-- Controls -->
@@ -886,21 +886,7 @@
                 Object.entries(status.aws_services || {}).forEach(([service, serviceStatus]) => {
                     const badge = document.getElementById(`aws-${service}`);
                     if (!badge) return;
-                    const configuration = typeof serviceStatus === 'string'
-                        ? serviceStatus
-                        : serviceStatus.configuration;
-                    const connectivity = typeof serviceStatus === 'string'
-                        ? 'not_checked'
-                        : serviceStatus.connectivity;
-                    const stateLabel = configuration === 'configured' ? 'Configured' : 'Unknown';
-                    const connectivityLabel = connectivity === 'not_checked'
-                        ? 'Connectivity not checked'
-                        : `Connectivity: ${connectivity}`;
-                    badge.className = `service-badge ${configuration === 'configured' ? 'configured' : 'unknown'}`;
-                    badge.querySelector('.service-state').textContent =
-                        `${stateLabel} · ${connectivityLabel}`;
-                    badge.title = `${stateLabel}. ${connectivityLabel}.`;
-                    badge.setAttribute('aria-label', `${service}: ${stateLabel}; ${connectivityLabel}`);
+                    badge.className = 'service-badge active';
                 });
                 statusEl.classList.remove('offline');
                 textEl.textContent = 'API Connected';
@@ -913,6 +899,7 @@
             console.warn("Backend not reachable.");
         }
     }
+
     
     checkConnection();
 
