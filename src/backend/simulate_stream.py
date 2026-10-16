@@ -22,6 +22,9 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 try:
     import requests
 except ImportError:
@@ -105,7 +108,7 @@ def generate_pmu_reading(scenario: str) -> dict:
         }
     
     reading["sensor_id"] = random.choice(["PMU-R1", "PMU-R2", "PMU-R3", "PMU-R4"])
-    reading["timestamp"] = datetime.datetime.utcnow().isoformat()
+    reading["timestamp"] = datetime.datetime.now(datetime.UTC).isoformat()
     reading["scenario"] = scenario
     return reading
 
@@ -172,15 +175,20 @@ def send_to_cloudwatch(scenario: str, reading: dict):
         pass  # Don't spam logs for CW errors
 
 
-def call_demo_api():
+def call_demo_api(scenario: str = "normal"):
     """POST to /demo/run and return the result."""
+    param = "normal"
+    if scenario in ("line_overload", "overload"):
+        param = "overload"
+    elif scenario in ("cyber_attack", "attack"):
+        param = "attack"
     try:
         if requests:
-            resp = requests.post(f"{API_URL}/demo/run", timeout=15)
+            resp = requests.post(f"{API_URL}/demo/run?scenario={param}", timeout=15)
             return resp.json()
         else:
             request = urllib.request.Request(
-                f"{API_URL}/demo/run",
+                f"{API_URL}/demo/run?scenario={param}",
                 data=b"",
                 method="POST",
             )
@@ -235,7 +243,7 @@ while True:
         send_to_cloudwatch(scenario, reading)
         
         # 4. Call the ML pipeline API
-        result = call_demo_api()
+        result = call_demo_api(scenario)
         if result:
             score = result.get("step1_anomaly", {}).get("anomaly_score", "?")
             label = result.get("step1_anomaly", {}).get("label", "?")

@@ -61,6 +61,7 @@ class AWSLogger:
         self._cw  = boto3.client("cloudwatch", region_name=REGION)
         self._table     = CFG["dynamodb_table"]
         self._namespace = CFG["cw_namespace"]
+        self._local_demo_store = {}
 
     def claim_demo_request(self, request_id: str, owner_token: str) -> bool:
         """Atomically claim a demo request shared by every worker."""
@@ -82,27 +83,52 @@ class AWSLogger:
             return True
         except self._ddb.exceptions.ConditionalCheckFailedException:
             return False
+        except Exception as exc:
+            # Local fallback for development or expired credentials
+            logger.debug("[AWSLogger] DynamoDB claim_demo_request failed (%s) — using local fallback", exc)
+            if request_id not in self._local_demo_store:
+                self._local_demo_store[request_id] = {
+                    "status": "IN_PROGRESS",
+                    "owner_token": owner_token,
+                    "expires_at": now + 60,
+                    "result": None,
+                }
+                return True
+            stored = self._local_demo_store[request_id]
+            if stored.get("expires_at", 0) <= now:
+                self._local_demo_store[request_id] = {
+                    "status": "IN_PROGRESS",
+                    "owner_token": owner_token,
+                    "expires_at": now + 60,
+                    "result": None,
+                }
+                return True
+            return False
 
     def get_demo_request(self, request_id: str) -> Optional[dict]:
         """Read an idempotency record consistently across workers."""
-        response = self._ddb.get_item(
-            TableName=self._table,
-            Key={
-                "agent_id": {"S": f"demo-request#{request_id}"},
-                "timestamp": {"S": "DEMO_RUN"},
-            },
-            ConsistentRead=True,
-        )
-        item = response.get("Item")
-        if not item:
-            return None
+        try:
+            response = self._ddb.get_item(
+                TableName=self._table,
+                Key={
+                    "agent_id": {"S": f"demo-request#{request_id}"},
+                    "timestamp": {"S": "DEMO_RUN"},
+                },
+                ConsistentRead=True,
+            )
+            item = response.get("Item")
+            if not item:
+                return None
 
-        result = json.loads(item["result"]["S"]) if "result" in item else None
-        return {
-            "status": item["status"]["S"],
-            "expires_at": int(item["ttl"]["N"]),
-            "result": result,
-        }
+            result = json.loads(item["result"]["S"]) if "result" in item else None
+            return {
+                "status": item["status"]["S"],
+                "expires_at": int(item["ttl"]["N"]),
+                "result": result,
+            }
+        except Exception as exc:
+            logger.debug("[AWSLogger] DynamoDB get_demo_request failed (%s) — using local fallback", exc)
+            return self._local_demo_store.get(request_id)
 
     def finish_demo_request(
         self,
@@ -140,6 +166,21 @@ class AWSLogger:
             return True
         except self._ddb.exceptions.ConditionalCheckFailedException:
             return False
+        except Exception as exc:
+            logger.debug("[AWSLogger] DynamoDB finish_demo_request failed (%s) — using local fallback", exc)
+            if request_id in self._local_demo_store:
+                stored = self._local_demo_store[request_id]
+                if stored.get("owner_token") == owner_token and stored.get("status") == "IN_PROGRESS":
+                    stored["status"] = status
+                    stored["result"] = result
+                    stored.pop("owner_token", None)
+                    return True
+            self._local_demo_store[request_id] = {
+                "status": status,
+                "result": result,
+                "expires_at": int(time.time()) + 86400,
+            }
+            return True
 
     def log_anomaly_decision(self, result: dict) -> bool:
         """

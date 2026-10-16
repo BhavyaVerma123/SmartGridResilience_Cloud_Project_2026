@@ -132,7 +132,7 @@ class AnomalyDetectionAgent:
         self._scaler  = None
         self._imputer = None
         self._load_artifacts()
-        print(f"[{self.agent_id}] Anomaly Detection Agent initialized ✅")
+        print(f"[{self.agent_id}] Anomaly Detection Agent initialized [OK]")
 
     def _load_artifacts(self):
         """Load model + preprocessor artifacts from disk."""
@@ -278,7 +278,7 @@ class StabilityAssessmentAgent:
         self._scaler  = None
         self._imputer = None
         self._load_artifacts()
-        print(f"[{self.agent_id}] Stability Assessment Agent initialized ✅")
+        print(f"[{self.agent_id}] Stability Assessment Agent initialized [OK]")
 
     def _load_artifacts(self):
         for fname, attr in [
